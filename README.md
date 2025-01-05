@@ -66,7 +66,7 @@ impl ZellijPlugin for State {
 
 ## Notes
 
-Unlike the (nucleo)[https://crates.io/crates/nucleo] crate, this can't run
+Unlike the [nucleo](https://crates.io/crates/nucleo) crate, this can't run
 concurrently due to existing limitations with the zellij plugin interface.
 This shouldn't matter for reasonably short lists, but may be noticeable for
 larger lists.
