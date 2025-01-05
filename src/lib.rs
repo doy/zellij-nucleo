@@ -1,14 +1,438 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+//! This crate provides a fuzzy finder widget based on
+//! [nucleo-matcher](https://crates.io/crates/nucleo-matcher) for use in
+//! [zellij plugins](https://zellij.dev/documentation/plugins). It can be used by
+//! your own plugins to allow easy searching through a list of options, and
+//! automatically handles the picker UI as needed.
+//!
+//! ## Usage
+//!
+//! A basic plugin that uses the `zellij-nucleo` crate to switch tabs can be
+//! structured like this:
+//!
+//! ```rust
+//! use zellij_tile::prelude::*;
+//!
+//! #[derive(Default)]
+//! struct State {
+//!     picker: zellij_nucleo::Picker<u32>,
+//! }
+//!
+//! register_plugin!(State);
+//!
+//! impl ZellijPlugin for State {
+//!     fn load(
+//!         &mut self,
+//!         configuration: std::collections::BTreeMap<String, String>,
+//!     ) {
+//!         request_permission(&[
+//!             PermissionType::ReadApplicationState,
+//!             PermissionType::ChangeApplicationState,
+//!         ]);
+//!
+//!         subscribe(&[EventType::TabUpdate]);
+//!         self.picker.load(&configuration);
+//!     }
+//!
+//!     fn update(&mut self, event: Event) -> bool {
+//!         match self.picker.update(&event) {
+//!             Some(zellij_nucleo::Response::Select(entry)) => {
+//!                 go_to_tab(entry.data);
+//!                 close_self();
+//!             }
+//!             Some(zellij_nucleo::Response::Cancel) => {
+//!                 close_self();
+//!             }
+//!             None => {}
+//!         }
+//!
+//!         if let Event::TabUpdate(tabs) = event {
+//!             self.picker.clear();
+//!             self.picker.extend(tabs.iter().map(|tab| zellij_nucleo::Entry {
+//!                 data: u32::try_from(tab.position).unwrap(),
+//!                 string: format!("{}: {}", tab.position + 1, tab.name),
+//!             }));
+//!         }
+//!
+//!         self.picker.needs_redraw()
+//!     }
+//!
+//!     fn render(&mut self, rows: usize, cols: usize) {
+//!         self.picker.render(rows, cols);
+//!     }
+//! }
+//! ```
+
+use zellij_tile::prelude::*;
+
+use std::fmt::Write as _;
+
+use owo_colors::OwoColorize as _;
+use unicode_width::UnicodeWidthChar as _;
+
+const PICKER_EVENTS: &[EventType] = &[EventType::Key];
+
+/// An entry in the picker.
+///
+/// The type parameter corresponds to the type of the additional data
+/// associated with each entry.
+#[derive(
+    Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq,
+)]
+pub struct Entry<T> {
+    /// String that will be displayed in the picker window, and filtered when
+    /// searching.
+    pub string: String,
+    /// Extra data associated with the picker entry, which can be retrieved
+    /// when an entry is selected.
+    pub data: T,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl<T> AsRef<str> for Entry<T> {
+    fn as_ref(&self) -> &str {
+        &self.string
+    }
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+/// Possible results from the picker.
+#[derive(Debug)]
+pub enum Response<T> {
+    /// The user selected a specific entry.
+    Select(Entry<T>),
+    /// The user closed the picker without selecting an entry.
+    Cancel,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    #[default]
+    Normal,
+    Search,
+}
+
+/// State of the picker itself.
+#[derive(Default)]
+pub struct Picker<T: Clone + PartialEq> {
+    query: String,
+    all_entries: Vec<Entry<T>>,
+    search_results: Vec<(Entry<T>, Vec<u32>)>,
+    selected: usize,
+    input_mode: InputMode,
+    needs_redraw: bool,
+
+    pattern: nucleo_matcher::pattern::Pattern,
+    matcher: nucleo_matcher::Matcher,
+}
+
+impl<T: Clone + PartialEq> Picker<T> {
+    /// This function must be called during your plugin's
+    /// [`load`](zellij_tile::ZellijPlugin::load) function.
+    pub fn load(
+        &mut self,
+        _configuration: &std::collections::BTreeMap<String, String>,
+    ) {
+        subscribe(PICKER_EVENTS);
+    }
+
+    /// This function must be called during your plugin's
+    /// [`update`](zellij_tile::ZellijPlugin::update) function. If an entry
+    /// was selected or the picker was closed, this function will return a
+    /// [`Response`]. This function will update the picker's internal state
+    /// of whether it needs to redraw the picker, so your plugin's
+    /// [`update`](zellij_tile::ZellijPlugin::update) function should return
+    /// true if [`needs_redraw`](Self::needs_redraw) returns true.
+    pub fn update(&mut self, event: &Event) -> Option<Response<T>> {
+        match event {
+            Event::Key(key) => self.handle_key(key),
+            _ => None,
+        }
+    }
+
+    /// This function must be called during your plugin's
+    /// [`render`](zellij_tile::ZellijPlugin::render) function.
+    pub fn render(&mut self, rows: usize, cols: usize) {
+        if rows == 0 {
+            return;
+        }
+
+        let visible_entry_count = rows - 1;
+        let visible_entries: Vec<(Entry<T>, Vec<u32>)> = self
+            .search_results
+            .iter()
+            .skip((self.selected / visible_entry_count) * visible_entry_count)
+            .take(visible_entry_count)
+            .cloned()
+            .collect();
+        let visible_selected = self.selected % visible_entry_count;
+
+        print!("  ");
+        if self.input_mode == InputMode::Normal && self.query.is_empty() {
+            print!(
+                "{}",
+                "(press / to search)".fg::<owo_colors::colors::BrightBlack>()
+            );
+        } else {
+            print!("{}", self.query);
+            if self.input_mode == InputMode::Search {
+                print!("{}", " ".bg::<owo_colors::colors::Green>());
+            }
+        }
+        println!();
+
+        let lines: Vec<_> = visible_entries
+            .iter()
+            .enumerate()
+            .map(|(i, (item, indices))| {
+                let mut line = String::new();
+
+                if i == visible_selected {
+                    write!(
+                        &mut line,
+                        "{} ",
+                        ">".fg::<owo_colors::colors::Yellow>()
+                    )
+                    .unwrap();
+                } else {
+                    write!(&mut line, "  ").unwrap();
+                }
+
+                let mut current_col = 2;
+                for (char_idx, c) in item.string.chars().enumerate() {
+                    if current_col + c.width().unwrap_or(0) > cols - 6 {
+                        write!(
+                            &mut line,
+                            "{}",
+                            " [...]".fg::<owo_colors::colors::BrightBlack>()
+                        )
+                        .unwrap();
+                        break;
+                    }
+                    if indices.contains(&u32::try_from(char_idx).unwrap()) {
+                        write!(
+                            &mut line,
+                            "{}",
+                            c.fg::<owo_colors::colors::Cyan>()
+                        )
+                        .unwrap();
+                    } else if i == visible_selected {
+                        write!(
+                            &mut line,
+                            "{}",
+                            c.fg::<owo_colors::colors::Yellow>()
+                        )
+                        .unwrap();
+                    } else {
+                        write!(&mut line, "{}", c).unwrap();
+                    }
+
+                    current_col += c.width().unwrap_or(0);
+                }
+                line
+            })
+            .collect();
+
+        print!("{}", lines.join("\n"));
+
+        self.needs_redraw = false;
+    }
+
+    /// Returns true if the picker needs to be redrawn. Your plugin's
+    /// [`update`](zellij_tile::ZellijPlugin::update) function should return
+    /// true if this function returns true.
+    pub fn needs_redraw(&self) -> bool {
+        self.needs_redraw
+    }
+
+    /// Forces a specific entry in the list of entries to be selected.
+    pub fn select(&mut self, idx: usize) {
+        self.selected = idx;
+        self.needs_redraw = true;
+    }
+
+    /// Removes all entries in the list.
+    pub fn clear(&mut self) {
+        self.all_entries.clear();
+        self.search();
+    }
+
+    /// Adds new entries to the list.
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = Entry<T>>) {
+        self.all_entries.extend(iter);
+        self.search();
+    }
+
+    /// Puts the picker into search mode (equivalent to pressing `/` when in
+    /// normal mode).
+    pub fn enter_search_mode(&mut self) {
+        self.input_mode = InputMode::Search;
+    }
+
+    /// Puts the picker into normal mode (equivalent to pressing Escape when
+    /// in search mode).
+    pub fn enter_normal_mode(&mut self) {
+        self.input_mode = InputMode::Normal;
+    }
+
+    fn search(&mut self) {
+        let prev_selected = self
+            .search_results
+            .get(self.selected)
+            .map(|(entry, _)| entry.clone());
+
+        self.pattern.reparse(
+            &self.query,
+            nucleo_matcher::pattern::CaseMatching::Ignore,
+            nucleo_matcher::pattern::Normalization::Smart,
+        );
+        let mut haystack = vec![];
+        let mut new_search_results: Vec<_> = self
+            .all_entries
+            .iter()
+            .filter_map(|entry| {
+                let haystack = nucleo_matcher::Utf32Str::new(
+                    &entry.string,
+                    &mut haystack,
+                );
+                let mut indices = vec![];
+                self.pattern
+                    .indices(haystack, &mut self.matcher, &mut indices)
+                    .map(|score| (entry.clone(), score, indices))
+            })
+            .collect();
+        new_search_results
+            .sort_by_key(|(_, score, _)| std::cmp::Reverse(*score));
+        self.search_results = new_search_results
+            .into_iter()
+            .map(|(entry, _, indices)| (entry, indices))
+            .collect();
+
+        if let Some(prev_selected) = prev_selected {
+            self.selected = self
+                .search_results
+                .iter()
+                .enumerate()
+                .find_map(|(idx, (entry, _))| {
+                    (*entry == prev_selected).then_some(idx)
+                })
+                .unwrap_or(0);
+        }
+
+        self.needs_redraw = true;
+    }
+
+    fn handle_key(&mut self, key: &KeyWithModifier) -> Option<Response<T>> {
+        self.handle_global_key(key)
+            .or_else(|| match self.input_mode {
+                InputMode::Normal => self.handle_normal_key(key),
+                InputMode::Search => self.handle_search_key(key),
+            })
+    }
+
+    fn handle_normal_key(
+        &mut self,
+        key: &KeyWithModifier,
+    ) -> Option<Response<T>> {
+        match key.bare_key {
+            BareKey::Char('j') if key.has_no_modifiers() => {
+                self.down();
+            }
+            BareKey::Char('k') if key.has_no_modifiers() => {
+                self.up();
+            }
+            BareKey::Char(c @ '1'..='8') if key.has_no_modifiers() => {
+                let position =
+                    usize::try_from(c.to_digit(10).unwrap() - 1).unwrap();
+                return self
+                    .search_results
+                    .get(position)
+                    .map(|item| Response::Select(item.0.clone()));
+            }
+            BareKey::Char('9') if key.has_no_modifiers() => {
+                return self
+                    .search_results
+                    .last()
+                    .map(|item| Response::Select(item.0.clone()))
+            }
+            BareKey::Char('/') if key.has_no_modifiers() => {
+                self.input_mode = InputMode::Search;
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn handle_search_key(
+        &mut self,
+        key: &KeyWithModifier,
+    ) -> Option<Response<T>> {
+        match key.bare_key {
+            BareKey::Char(c) if key.has_no_modifiers() => {
+                self.query.push(c);
+                self.search();
+                self.selected = 0;
+            }
+            BareKey::Backspace if key.has_no_modifiers() => {
+                self.query.pop();
+                self.search();
+                self.selected = 0;
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn handle_global_key(
+        &mut self,
+        key: &KeyWithModifier,
+    ) -> Option<Response<T>> {
+        match key.bare_key {
+            BareKey::Tab if key.has_no_modifiers() => {
+                self.down();
+            }
+            BareKey::Down if key.has_no_modifiers() => {
+                self.down();
+            }
+            BareKey::Tab if key.has_modifiers(&[KeyModifier::Shift]) => {
+                self.up();
+            }
+            BareKey::Up if key.has_no_modifiers() => {
+                self.up();
+            }
+            BareKey::Esc if key.has_no_modifiers() => {
+                self.input_mode = InputMode::Normal;
+                self.needs_redraw = true;
+            }
+            BareKey::Char('c') if key.has_modifiers(&[KeyModifier::Ctrl]) => {
+                return Some(Response::Cancel);
+            }
+            BareKey::Enter if key.has_no_modifiers() => {
+                return Some(Response::Select(
+                    self.search_results[self.selected].0.clone(),
+                ));
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    fn down(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.selected = (self.search_results.len() + self.selected + 1)
+            % self.search_results.len();
+        self.needs_redraw = true;
+    }
+
+    fn up(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+        self.selected = (self.search_results.len() + self.selected - 1)
+            % self.search_results.len();
+        self.needs_redraw = true;
     }
 }
