@@ -294,7 +294,7 @@ impl<T: Clone + PartialEq> Picker<T> {
             nucleo_matcher::pattern::Normalization::Smart,
         );
         let mut haystack = vec![];
-        let mut new_search_results: Vec<_> = self
+        self.search_results = self
             .all_entries
             .iter()
             .filter_map(|entry| {
@@ -312,8 +312,7 @@ impl<T: Clone + PartialEq> Picker<T> {
                     })
             })
             .collect();
-        new_search_results.sort();
-        self.search_results = new_search_results;
+        self.search_results.sort();
 
         if let Some(prev_selected) = prev_selected {
             self.selected = self
