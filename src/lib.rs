@@ -114,7 +114,7 @@ enum InputMode {
 pub struct Picker<T: Clone + PartialEq> {
     query: String,
     all_entries: Vec<Entry<T>>,
-    search_results: Vec<(Entry<T>, Vec<u32>)>,
+    search_results: Vec<SearchResult<T>>,
     selected: usize,
     input_mode: InputMode,
     needs_redraw: bool,
@@ -155,7 +155,7 @@ impl<T: Clone + PartialEq> Picker<T> {
         }
 
         let visible_entry_count = rows - 1;
-        let visible_entries: Vec<(Entry<T>, Vec<u32>)> = self
+        let visible_entries: Vec<SearchResult<T>> = self
             .search_results
             .iter()
             .skip((self.selected / visible_entry_count) * visible_entry_count)
@@ -181,7 +181,7 @@ impl<T: Clone + PartialEq> Picker<T> {
         let lines: Vec<_> = visible_entries
             .iter()
             .enumerate()
-            .map(|(i, (item, indices))| {
+            .map(|(i, search_result)| {
                 let mut line = String::new();
 
                 if i == visible_selected {
@@ -196,7 +196,9 @@ impl<T: Clone + PartialEq> Picker<T> {
                 }
 
                 let mut current_col = 2;
-                for (char_idx, c) in item.string.chars().enumerate() {
+                for (char_idx, c) in
+                    search_result.entry.string.chars().enumerate()
+                {
                     if current_col + c.width().unwrap_or(0) > cols - 6 {
                         write!(
                             &mut line,
@@ -206,7 +208,10 @@ impl<T: Clone + PartialEq> Picker<T> {
                         .unwrap();
                         break;
                     }
-                    if indices.contains(&u32::try_from(char_idx).unwrap()) {
+                    if search_result
+                        .indices
+                        .contains(&u32::try_from(char_idx).unwrap())
+                    {
                         write!(
                             &mut line,
                             "{}",
@@ -281,7 +286,7 @@ impl<T: Clone + PartialEq> Picker<T> {
         let prev_selected = self
             .search_results
             .get(self.selected)
-            .map(|(entry, _)| entry.clone());
+            .map(|search_result| search_result.entry.clone());
 
         self.pattern.reparse(
             &self.query,
@@ -300,23 +305,23 @@ impl<T: Clone + PartialEq> Picker<T> {
                 let mut indices = vec![];
                 self.pattern
                     .indices(haystack, &mut self.matcher, &mut indices)
-                    .map(|score| (entry.clone(), score, indices))
+                    .map(|score| SearchResult {
+                        entry: entry.clone(),
+                        score,
+                        indices,
+                    })
             })
             .collect();
-        new_search_results
-            .sort_by_key(|(_, score, _)| std::cmp::Reverse(*score));
-        self.search_results = new_search_results
-            .into_iter()
-            .map(|(entry, _, indices)| (entry, indices))
-            .collect();
+        new_search_results.sort();
+        self.search_results = new_search_results;
 
         if let Some(prev_selected) = prev_selected {
             self.selected = self
                 .search_results
                 .iter()
                 .enumerate()
-                .find_map(|(idx, (entry, _))| {
-                    (*entry == prev_selected).then_some(idx)
+                .find_map(|(idx, search_result)| {
+                    (search_result.entry == prev_selected).then_some(idx)
                 })
                 .unwrap_or(0);
         }
@@ -346,16 +351,16 @@ impl<T: Clone + PartialEq> Picker<T> {
             BareKey::Char(c @ '1'..='8') if key.has_no_modifiers() => {
                 let position =
                     usize::try_from(c.to_digit(10).unwrap() - 1).unwrap();
-                return self
-                    .search_results
-                    .get(position)
-                    .map(|item| Response::Select(item.0.clone()));
+                return self.search_results.get(position).map(
+                    |search_result| {
+                        Response::Select(search_result.entry.clone())
+                    },
+                );
             }
             BareKey::Char('9') if key.has_no_modifiers() => {
-                return self
-                    .search_results
-                    .last()
-                    .map(|item| Response::Select(item.0.clone()))
+                return self.search_results.last().map(|search_result| {
+                    Response::Select(search_result.entry.clone())
+                })
             }
             BareKey::Char('/') if key.has_no_modifiers() => {
                 self.input_mode = InputMode::Search;
@@ -414,7 +419,7 @@ impl<T: Clone + PartialEq> Picker<T> {
             }
             BareKey::Enter if key.has_no_modifiers() => {
                 return Some(Response::Select(
-                    self.search_results[self.selected].0.clone(),
+                    self.search_results[self.selected].entry.clone(),
                 ));
             }
             _ => {}
@@ -439,5 +444,36 @@ impl<T: Clone + PartialEq> Picker<T> {
         self.selected = (self.search_results.len() + self.selected - 1)
             % self.search_results.len();
         self.needs_redraw = true;
+    }
+}
+
+#[derive(Clone)]
+struct SearchResult<T> {
+    entry: Entry<T>,
+    score: u32,
+    indices: Vec<u32>,
+}
+
+impl<T> Ord for SearchResult<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.score
+            .cmp(&other.score)
+            .reverse()
+            .then_with(|| self.indices.first().cmp(&other.indices.first()))
+            .then_with(|| self.entry.string.cmp(&other.entry.string))
+    }
+}
+
+impl<T> PartialOrd for SearchResult<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Eq for SearchResult<T> {}
+
+impl<T> PartialEq for SearchResult<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
