@@ -121,6 +121,7 @@ pub struct Picker<T: Clone + PartialEq> {
 
     pattern: nucleo_matcher::pattern::Pattern,
     matcher: nucleo_matcher::Matcher,
+    case_matching: nucleo_matcher::pattern::CaseMatching,
 }
 
 impl<T: Clone + PartialEq> Picker<T> {
@@ -128,9 +129,31 @@ impl<T: Clone + PartialEq> Picker<T> {
     /// [`load`](zellij_tile::ZellijPlugin::load) function.
     pub fn load(
         &mut self,
-        _configuration: &std::collections::BTreeMap<String, String>,
+        configuration: &std::collections::BTreeMap<String, String>,
     ) {
         subscribe(PICKER_EVENTS);
+
+        match configuration
+            .get("nucleo_case_matching")
+            .map(|s| s.as_ref())
+        {
+            Some("respect") => {
+                self.case_matching =
+                    nucleo_matcher::pattern::CaseMatching::Respect
+            }
+            Some("ignore") => {
+                self.case_matching =
+                    nucleo_matcher::pattern::CaseMatching::Ignore
+            }
+            Some("smart") => {
+                self.case_matching =
+                    nucleo_matcher::pattern::CaseMatching::Smart
+            }
+            Some(s) => {
+                panic!("unrecognized value {s} for option 'nucleo_case_matching': expected 'respect', 'ignore', 'smart'");
+            }
+            None => {}
+        }
     }
 
     /// This function must be called during your plugin's
@@ -292,7 +315,7 @@ impl<T: Clone + PartialEq> Picker<T> {
 
         self.pattern.reparse(
             &self.query,
-            nucleo_matcher::pattern::CaseMatching::Ignore,
+            self.case_matching,
             nucleo_matcher::pattern::Normalization::Smart,
         );
         let mut haystack = vec![];
