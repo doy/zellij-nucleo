@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.6] - 2025-01-06
+
+### Changed
+
+* Significantly optimized the search function.
+* The data in the picker entries can now be any type.
+
 ## [0.0.5] - 2025-01-05
 
 ### Changed
