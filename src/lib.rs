@@ -163,6 +163,24 @@ impl<T: Clone + PartialEq> Picker<T> {
                 panic!("unrecognized value {s} for option 'nucleo_match_paths': expected 'true', 'false'");
             }
         }
+
+        match configuration
+            .get("nucleo_start_in_search_mode")
+            .map(|s| s.as_ref())
+        {
+            Some("true") => {
+                self.enter_search_mode();
+            }
+            Some("false") => {
+                self.enter_normal_mode();
+            }
+            Some(s) => {
+                panic!("unrecognized value {s} for option 'nucleo_start_in_search_mode': expected 'true', 'false'");
+            }
+            None => {
+                // default to the mode that the plugin itself requests
+            }
+        }
     }
 
     /// This function must be called during your plugin's
