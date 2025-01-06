@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4] - 2025-01-05
+
+### Added
+
+* Added `nucleo_start_in_search_mode` option for configuring the mode to
+  start in.
+
 ## [0.0.3] - 2025-01-05
 
 ### Added
