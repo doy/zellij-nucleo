@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.5] - 2025-01-05
+
+### Changed
+
+* Made the setting of configuration options more consistent - now all options
+  can be set by individual plugins in code, and the configuration that is
+  passed in via the zellij configuration will override those settings if they
+  exist, and leave the plugin-specified defaults alone otherwise.
+
 ## [0.0.4] - 2025-01-05
 
 ### Added

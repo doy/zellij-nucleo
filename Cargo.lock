@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "zellij-nucleo"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "nucleo-matcher",
  "owo-colors",
