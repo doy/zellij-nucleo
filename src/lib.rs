@@ -242,6 +242,11 @@ impl<T: Clone + PartialEq> Picker<T> {
         self.needs_redraw
     }
 
+    /// Returns the current list of entries in the picker.
+    pub fn entries(&self) -> &[Entry<T>] {
+        &self.all_entries
+    }
+
     /// Forces a specific entry in the list of entries to be selected.
     pub fn select(&mut self, idx: usize) {
         self.selected = idx;
