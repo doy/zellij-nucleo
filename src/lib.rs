@@ -145,23 +145,27 @@ impl<T: Clone + PartialEq> Picker<T> {
                 self.case_matching =
                     nucleo_matcher::pattern::CaseMatching::Ignore
             }
-            Some("smart") | None => {
+            Some("smart") => {
                 self.case_matching =
                     nucleo_matcher::pattern::CaseMatching::Smart
             }
             Some(s) => {
                 panic!("unrecognized value {s} for option 'nucleo_case_matching': expected 'respect', 'ignore', 'smart'");
             }
+            None => {}
         }
 
         match configuration.get("nucleo_match_paths").map(|s| s.as_ref()) {
             Some("true") => {
-                self.matcher.config.set_match_paths();
+                self.set_match_paths();
             }
-            Some("false") | None => {}
+            Some("false") => {
+                self.clear_match_paths();
+            }
             Some(s) => {
                 panic!("unrecognized value {s} for option 'nucleo_match_paths': expected 'true', 'false'");
             }
+            None => {}
         }
 
         match configuration
@@ -177,9 +181,7 @@ impl<T: Clone + PartialEq> Picker<T> {
             Some(s) => {
                 panic!("unrecognized value {s} for option 'nucleo_start_in_search_mode': expected 'true', 'false'");
             }
-            None => {
-                // default to the mode that the plugin itself requests
-            }
+            None => {}
         }
     }
 
@@ -322,6 +324,23 @@ impl<T: Clone + PartialEq> Picker<T> {
         self.search();
     }
 
+    /// Request that the fuzzy matcher always respect case when matching.
+    pub fn use_case_matching_respect(&mut self) {
+        self.case_matching = nucleo_matcher::pattern::CaseMatching::Respect;
+    }
+
+    /// Request that the fuzzy matcher always ignore case when matching.
+    pub fn use_case_matching_ignore(&mut self) {
+        self.case_matching = nucleo_matcher::pattern::CaseMatching::Ignore;
+    }
+
+    /// Request that the fuzzy matcher respect case when matching if the
+    /// query contains any uppercase characters, but ignore case otherwise.
+    /// This is the default.
+    pub fn use_case_matching_smart(&mut self) {
+        self.case_matching = nucleo_matcher::pattern::CaseMatching::Smart;
+    }
+
     /// Puts the picker into search mode (equivalent to pressing `/` when in
     /// normal mode).
     pub fn enter_search_mode(&mut self) {
@@ -329,9 +348,21 @@ impl<T: Clone + PartialEq> Picker<T> {
     }
 
     /// Puts the picker into normal mode (equivalent to pressing Escape when
-    /// in search mode).
+    /// in search mode). This is the default.
     pub fn enter_normal_mode(&mut self) {
         self.input_mode = InputMode::Normal;
+    }
+
+    /// Configures the fuzzy matcher to adjust matching bonuses appropriate
+    /// for matching paths.
+    pub fn set_match_paths(&mut self) {
+        self.matcher.config.set_match_paths();
+    }
+
+    /// Configures the fuzzy matcher to adjust matching bonuses appropriate
+    /// for matching arbitrary strings. This is the default.
+    pub fn clear_match_paths(&mut self) {
+        self.matcher.config = nucleo_matcher::Config::DEFAULT;
     }
 
     fn search(&mut self) {
