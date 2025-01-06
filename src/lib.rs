@@ -381,6 +381,11 @@ impl<T: Clone + PartialEq> Picker<T> {
                 self.search();
                 self.selected = 0;
             }
+            BareKey::Char('u') if key.has_modifiers(&[KeyModifier::Ctrl]) => {
+                self.query.clear();
+                self.search();
+                self.selected = 0;
+            }
             BareKey::Backspace if key.has_no_modifiers() => {
                 self.query.pop();
                 self.search();
