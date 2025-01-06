@@ -1,6 +1,6 @@
 [package]
 name = "zellij-nucleo"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["Jesse Luehrs <doy@tozt.net>"]
 edition = "2021"
 
