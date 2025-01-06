@@ -75,7 +75,7 @@ const PICKER_EVENTS: &[EventType] = &[EventType::Key];
 ///
 /// The type parameter corresponds to the type of the additional data
 /// associated with each entry.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct Entry<T> {
     /// String that will be displayed in the picker window, and filtered when
     /// searching.
@@ -93,9 +93,9 @@ impl<T> AsRef<str> for Entry<T> {
 
 /// Possible results from the picker.
 #[derive(Debug)]
-pub enum Response<T> {
+pub enum Response {
     /// The user selected a specific entry.
-    Select(Entry<T>),
+    Select(usize),
     /// The user closed the picker without selecting an entry.
     Cancel,
 }
@@ -109,10 +109,10 @@ enum InputMode {
 
 /// State of the picker itself.
 #[derive(Default)]
-pub struct Picker<T: Clone> {
+pub struct Picker<T> {
     query: String,
     all_entries: Vec<Entry<T>>,
-    search_results: Vec<SearchResult<T>>,
+    search_results: Vec<SearchResult>,
     selected: usize,
     input_mode: InputMode,
     needs_redraw: bool,
@@ -122,7 +122,7 @@ pub struct Picker<T: Clone> {
     case_matching: nucleo_matcher::pattern::CaseMatching,
 }
 
-impl<T: Clone> Picker<T> {
+impl<T> Picker<T> {
     /// This function must be called during your plugin's
     /// [`load`](zellij_tile::ZellijPlugin::load) function.
     pub fn load(
@@ -190,7 +190,7 @@ impl<T: Clone> Picker<T> {
     /// of whether it needs to redraw the picker, so your plugin's
     /// [`update`](zellij_tile::ZellijPlugin::update) function should return
     /// true if [`needs_redraw`](Self::needs_redraw) returns true.
-    pub fn update(&mut self, event: &Event) -> Option<Response<T>> {
+    pub fn update(&mut self, event: &Event) -> Option<Response> {
         match event {
             Event::Key(key) => self.handle_key(key),
             _ => None,
@@ -205,13 +205,8 @@ impl<T: Clone> Picker<T> {
         }
 
         let visible_entry_count = rows - 1;
-        let visible_entries: Vec<SearchResult<T>> = self
-            .search_results
-            .iter()
-            .skip((self.selected / visible_entry_count) * visible_entry_count)
-            .take(visible_entry_count)
-            .cloned()
-            .collect();
+        let visible_entries_start =
+            (self.selected / visible_entry_count) * visible_entry_count;
         let visible_selected = self.selected % visible_entry_count;
 
         print!("  ");
@@ -228,8 +223,11 @@ impl<T: Clone> Picker<T> {
         }
         println!();
 
-        let lines: Vec<_> = visible_entries
+        let lines: Vec<_> = self
+            .search_results
             .iter()
+            .skip(visible_entries_start)
+            .take(visible_entry_count)
             .enumerate()
             .map(|(i, search_result)| {
                 let mut line = String::new();
@@ -246,8 +244,10 @@ impl<T: Clone> Picker<T> {
                 }
 
                 let mut current_col = 2;
-                for (char_idx, c) in
-                    search_result.entry.string.chars().enumerate()
+                for (char_idx, c) in self.all_entries[search_result.entry]
+                    .string
+                    .chars()
+                    .enumerate()
                 {
                     let width = c.width().unwrap_or(0);
                     if current_col + width > cols - 6 {
@@ -318,8 +318,28 @@ impl<T: Clone> Picker<T> {
 
     /// Adds new entries to the list.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = Entry<T>>) {
+        let prev_selected =
+            self.search_results.get(self.selected).map(|search_result| {
+                self.all_entries[search_result.entry].string.clone()
+            });
+
         self.all_entries.extend(iter);
         self.search();
+
+        if let Some(prev_selected) = prev_selected {
+            self.selected = self
+                .search_results
+                .iter()
+                .enumerate()
+                .find_map(|(idx, search_result)| {
+                    (self.all_entries[search_result.entry].string
+                        == prev_selected)
+                        .then_some(idx)
+                })
+                .unwrap_or(0);
+        } else {
+            self.selected = 0;
+        }
     }
 
     /// Request that the fuzzy matcher always respect case when matching.
@@ -364,11 +384,6 @@ impl<T: Clone> Picker<T> {
     }
 
     fn search(&mut self) {
-        let prev_selected = self
-            .search_results
-            .get(self.selected)
-            .map(|search_result| search_result.entry.clone());
-
         self.pattern.reparse(
             &self.query,
             self.case_matching,
@@ -378,7 +393,8 @@ impl<T: Clone> Picker<T> {
         self.search_results = self
             .all_entries
             .iter()
-            .filter_map(|entry| {
+            .enumerate()
+            .filter_map(|(i, entry)| {
                 let haystack = nucleo_matcher::Utf32Str::new(
                     &entry.string,
                     &mut haystack,
@@ -387,30 +403,24 @@ impl<T: Clone> Picker<T> {
                 self.pattern
                     .indices(haystack, &mut self.matcher, &mut indices)
                     .map(|score| SearchResult {
-                        entry: entry.clone(),
+                        entry: i,
                         score,
                         indices,
                     })
             })
             .collect();
-        self.search_results.sort();
-
-        if let Some(prev_selected) = prev_selected {
-            self.selected = self
-                .search_results
-                .iter()
-                .enumerate()
-                .find_map(|(idx, search_result)| {
-                    (search_result.entry.string == prev_selected.string)
-                        .then_some(idx)
-                })
-                .unwrap_or(0);
-        }
+        self.search_results.sort_by_key(|search_result| {
+            SearchResultWithString {
+                score: search_result.score,
+                first_index: search_result.indices.first().copied(),
+                string: &self.all_entries[search_result.entry].string,
+            }
+        });
 
         self.needs_redraw = true;
     }
 
-    fn handle_key(&mut self, key: &KeyWithModifier) -> Option<Response<T>> {
+    fn handle_key(&mut self, key: &KeyWithModifier) -> Option<Response> {
         self.handle_global_key(key)
             .or_else(|| match self.input_mode {
                 InputMode::Normal => self.handle_normal_key(key),
@@ -421,7 +431,7 @@ impl<T: Clone> Picker<T> {
     fn handle_normal_key(
         &mut self,
         key: &KeyWithModifier,
-    ) -> Option<Response<T>> {
+    ) -> Option<Response> {
         match key.bare_key {
             BareKey::Char('j') if key.has_no_modifiers() => {
                 self.down();
@@ -433,14 +443,12 @@ impl<T: Clone> Picker<T> {
                 let position =
                     usize::try_from(c.to_digit(10).unwrap() - 1).unwrap();
                 return self.search_results.get(position).map(
-                    |search_result| {
-                        Response::Select(search_result.entry.clone())
-                    },
+                    |search_result| Response::Select(search_result.entry),
                 );
             }
             BareKey::Char('9') if key.has_no_modifiers() => {
                 return self.search_results.last().map(|search_result| {
-                    Response::Select(search_result.entry.clone())
+                    Response::Select(search_result.entry)
                 })
             }
             BareKey::Char('/') if key.has_no_modifiers() => {
@@ -456,7 +464,7 @@ impl<T: Clone> Picker<T> {
     fn handle_search_key(
         &mut self,
         key: &KeyWithModifier,
-    ) -> Option<Response<T>> {
+    ) -> Option<Response> {
         match key.bare_key {
             BareKey::Char(c) if key.has_no_modifiers() => {
                 self.query.push(c);
@@ -482,7 +490,7 @@ impl<T: Clone> Picker<T> {
     fn handle_global_key(
         &mut self,
         key: &KeyWithModifier,
-    ) -> Option<Response<T>> {
+    ) -> Option<Response> {
         match key.bare_key {
             BareKey::Tab if key.has_no_modifiers() => {
                 self.down();
@@ -505,7 +513,7 @@ impl<T: Clone> Picker<T> {
             }
             BareKey::Enter if key.has_no_modifiers() => {
                 return Some(Response::Select(
-                    self.search_results[self.selected].entry.clone(),
+                    self.search_results[self.selected].entry,
                 ));
             }
             _ => {}
@@ -533,32 +541,39 @@ impl<T: Clone> Picker<T> {
     }
 }
 
-#[derive(Clone)]
-struct SearchResult<T> {
-    entry: Entry<T>,
+#[derive(Debug)]
+struct SearchResult {
+    entry: usize,
     score: u32,
     indices: Vec<u32>,
 }
 
-impl<T> Ord for SearchResult<T> {
+#[derive(Debug)]
+struct SearchResultWithString<'a> {
+    score: u32,
+    first_index: Option<u32>,
+    string: &'a str,
+}
+
+impl Ord for SearchResultWithString<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.score
             .cmp(&other.score)
             .reverse()
-            .then_with(|| self.indices.first().cmp(&other.indices.first()))
-            .then_with(|| self.entry.string.cmp(&other.entry.string))
+            .then_with(|| self.first_index.cmp(&other.first_index))
+            .then_with(|| self.string.cmp(other.string))
     }
 }
 
-impl<T> PartialOrd for SearchResult<T> {
+impl PartialOrd for SearchResultWithString<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Eq for SearchResult<T> {}
+impl Eq for SearchResultWithString<'_> {}
 
-impl<T> PartialEq for SearchResult<T> {
+impl PartialEq for SearchResultWithString<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == std::cmp::Ordering::Equal
     }
