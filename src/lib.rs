@@ -145,14 +145,23 @@ impl<T: Clone + PartialEq> Picker<T> {
                 self.case_matching =
                     nucleo_matcher::pattern::CaseMatching::Ignore
             }
-            Some("smart") => {
+            Some("smart") | None => {
                 self.case_matching =
                     nucleo_matcher::pattern::CaseMatching::Smart
             }
             Some(s) => {
                 panic!("unrecognized value {s} for option 'nucleo_case_matching': expected 'respect', 'ignore', 'smart'");
             }
-            None => {}
+        }
+
+        match configuration.get("nucleo_match_paths").map(|s| s.as_ref()) {
+            Some("true") => {
+                self.matcher.config.set_match_paths();
+            }
+            Some("false") | None => {}
+            Some(s) => {
+                panic!("unrecognized value {s} for option 'nucleo_match_paths': expected 'true', 'false'");
+            }
         }
     }
 
