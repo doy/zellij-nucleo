@@ -199,7 +199,8 @@ impl<T: Clone + PartialEq> Picker<T> {
                 for (char_idx, c) in
                     search_result.entry.string.chars().enumerate()
                 {
-                    if current_col + c.width().unwrap_or(0) > cols - 6 {
+                    let width = c.width().unwrap_or(0);
+                    if current_col + width > cols - 6 {
                         write!(
                             &mut line,
                             "{}",
@@ -208,6 +209,7 @@ impl<T: Clone + PartialEq> Picker<T> {
                         .unwrap();
                         break;
                     }
+
                     if search_result
                         .indices
                         .contains(&u32::try_from(char_idx).unwrap())
@@ -229,7 +231,7 @@ impl<T: Clone + PartialEq> Picker<T> {
                         write!(&mut line, "{}", c).unwrap();
                     }
 
-                    current_col += c.width().unwrap_or(0);
+                    current_col += width;
                 }
                 line
             })
