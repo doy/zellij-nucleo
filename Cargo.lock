@@ -3432,8 +3432,6 @@ version = "0.0.5"
 dependencies = [
  "nucleo-matcher",
  "owo-colors",
- "serde",
- "serde_json",
  "unicode-width",
  "zellij-tile",
 ]

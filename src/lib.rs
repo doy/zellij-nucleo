@@ -75,9 +75,7 @@ const PICKER_EVENTS: &[EventType] = &[EventType::Key];
 ///
 /// The type parameter corresponds to the type of the additional data
 /// associated with each entry.
-#[derive(
-    Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, Default)]
 pub struct Entry<T> {
     /// String that will be displayed in the picker window, and filtered when
     /// searching.
@@ -111,7 +109,7 @@ enum InputMode {
 
 /// State of the picker itself.
 #[derive(Default)]
-pub struct Picker<T: Clone + PartialEq> {
+pub struct Picker<T: Clone> {
     query: String,
     all_entries: Vec<Entry<T>>,
     search_results: Vec<SearchResult<T>>,
@@ -124,7 +122,7 @@ pub struct Picker<T: Clone + PartialEq> {
     case_matching: nucleo_matcher::pattern::CaseMatching,
 }
 
-impl<T: Clone + PartialEq> Picker<T> {
+impl<T: Clone> Picker<T> {
     /// This function must be called during your plugin's
     /// [`load`](zellij_tile::ZellijPlugin::load) function.
     pub fn load(
@@ -403,7 +401,8 @@ impl<T: Clone + PartialEq> Picker<T> {
                 .iter()
                 .enumerate()
                 .find_map(|(idx, search_result)| {
-                    (search_result.entry == prev_selected).then_some(idx)
+                    (search_result.entry.string == prev_selected.string)
+                        .then_some(idx)
                 })
                 .unwrap_or(0);
         }
